@@ -1,26 +1,20 @@
+mod player;
+mod window;
+
 use bevy::prelude::*;
+use player::{move_bullet_system, player, player_movement, spawn_bullet_system};
+use window::window_properties;
 
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
-        .add_systems(Startup, setup)
+        .add_systems(Startup, (setup, player, window_properties))
+        .add_systems(Update, player_movement)
+        .add_systems(Update, (spawn_bullet_system, move_bullet_system))
         .run();
 }
 
-fn setup(
-    mut commands: Commands,
-    asset_server: Res<AssetServer>,
-    mut texture_atlas_layouts: ResMut<Assets<TextureAtlasLayout>>,
-) {
+fn setup(mut commands: Commands) {
     // Spawning 2d camera
     commands.spawn(Camera2d::default());
-
-    // Load the sprite sheet
-    let texture = asset_server.load("soldier/idle/idle01.png");
-
-    // spawning the sprite
-    commands.spawn(Sprite {
-        image: texture.clone(),
-        ..default()
-    });
 }
