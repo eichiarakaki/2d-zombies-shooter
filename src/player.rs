@@ -5,7 +5,10 @@ use bevy::{
         system::{Commands, Query},
     },
     prelude::*,
+    sprite::Anchor,
+    text::cosmic_text::rustybuzz::Direction,
     transform,
+    window::PrimaryWindow,
 };
 
 #[derive(Component)]
@@ -16,11 +19,18 @@ pub struct MainPlayer {
 }
 
 #[derive(Component)]
-pub struct PlayerEntity(Entity);
-
-#[derive(Component)]
 pub struct Bullet {
     speed: f32,
+}
+
+#[derive(Component)]
+pub struct BulletDirection {
+    pub vector: Vec2,
+}
+
+#[derive(Component)]
+pub struct LifeTime {
+    time_left: f32,
 }
 
 pub fn player(
@@ -32,22 +42,17 @@ pub fn player(
     let texture = asset_server.load("soldier/idle/idle01.png");
 
     // spawning the sprite
-    let entity = commands
-        .spawn((
-            Sprite {
-                image: texture.clone(),
-                ..default()
-            },
-            MainPlayer {
-                speed: 200.,
-                x: 0.,
-                y: 0.,
-            },
-        ))
-        .id();
-
-    println!("{entity}");
-    commands.spawn(PlayerEntity(entity));
+    commands.spawn((
+        Sprite {
+            image: texture.clone(),
+            ..default()
+        },
+        MainPlayer {
+            speed: 200.,
+            x: 0.,
+            y: 0.,
+        },
+    ));
 }
 
 pub fn player_movement(
@@ -83,34 +88,93 @@ pub fn player_movement(
 pub fn spawn_bullet_system(
     buttons: Res<ButtonInput<MouseButton>>,
     mut commands: Commands,
-    player: Query<&MainPlayer>,
+    player: Query<&Transform, With<MainPlayer>>,
     asset_server: Res<AssetServer>,
 ) {
-    let player = player.single();
-
-    // Si se presiona el botón derecho del mouse, crear la bala
+    // Si se presiona el botón izquierdo del mouse, crear la bala
     if buttons.pressed(MouseButton::Left) {
-        commands.spawn((
-            Sprite {
-                image: asset_server.load("soldier/bullet/bullet0.png"),
-                custom_size: Some(Vec2::new(10., 10.)), // Cambiando en tamaño de la bala
+        // Obtener la posición y rotación del jugador
+        if let player_transform = player.single() {
+            let player_pos = player_transform.translation;
+            let player_rotation = player_transform.rotation;
 
-                flip_x: false,
-                flip_y: true,
-                ..default()
-            },
-            Bullet { speed: 1000. },
-            Transform::from_xyz(player.x, player.y, 0.),
-            // Transform::default(), // Posición inicial por defecto
-        ));
+            // Calcular la dirección en la que apunta el jugador usando su rotación
+            let direction = Vec2::new(0.0, 1.0).rotate(player_rotation.to_angle()); // Dirección en la que apunta el jugador
+
+            let speed = 1000.0; // Velocidad de la bala
+
+            // Crear la bala en la posición del jugador
+            commands.spawn((
+                Sprite {
+                    image: asset_server.load("soldier/bullet/bullet0.png"),
+                    custom_size: Some(Vec2::new(10., 10.)), // Cambiar el tamaño de la bala
+                    ..default()
+                },
+                Bullet { speed },
+                LifeTime { time_left: 1.0 },
+                Transform {
+                    translation: player_pos,
+                    rotation: player_rotation,
+                    ..default()
+                },
+                BulletDirection { vector: direction },
+            ));
+        }
+    }
+}
+
+pub fn aim(
+    mut player: Query<&mut Transform, With<MainPlayer>>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
+    camera: Query<(&Camera, &GlobalTransform)>,
+) {
+    for mut player_transform in &mut player {
+        let (camera, camera_transform) = camera.single();
+        let window = q_windows.single();
+
+        if let Some(cursor_pos) = window
+            .cursor_position()
+            .and_then(|cursor| Some(camera.viewport_to_world_2d(camera_transform, cursor)))
+        {
+            let player_dir = player_transform.local_x().truncate(); // Obteniendo la direccion donde apunta el jugador. el truncate remueve el eje z.
+            let cursor_dir = cursor_pos.unwrap() - player_transform.translation.truncate();
+            let angle = player_dir.angle_to(cursor_dir);
+
+            player_transform.rotate_z(angle);
+        }
     }
 }
 
 pub fn move_bullet_system(
-    mut query: Query<(&mut Transform, &Bullet), With<Bullet>>,
+    mut query: Query<
+        (
+            Entity,
+            &mut Transform,
+            &Bullet,
+            &mut LifeTime,
+            &BulletDirection,
+        ),
+        With<Bullet>,
+    >,
+    mut commands: Commands,
     timer: Res<Time>,
+    q_windows: Query<&Window, With<PrimaryWindow>>,
 ) {
-    for (mut transform, bullet) in query.iter_mut() {
-        transform.translation.x += bullet.speed * timer.delta_secs();
+    if let Some(position) = q_windows.single().cursor_position() {
+        println!("Cursor is inside the primary window, at {:?}", position);
+        // Cada bala entra en este bucle
+        for (entity, mut transform, bullet, mut life_time, direction) in query.iter_mut() {
+            // Actualizar el tiempo de vida de la bala
+            life_time.time_left -= timer.delta_secs();
+
+            // Si la bala ha agotado su tiempo de vida, despawnea
+            if life_time.time_left <= 0.0 {
+                commands.entity(entity).despawn();
+            }
+
+            // Mover la bala en la dirección que está mirando el jugador
+            transform.translation.x += direction.vector.x * bullet.speed * timer.delta_secs();
+            transform.translation.y += direction.vector.y * bullet.speed * timer.delta_secs();
+        }
     }
 }
